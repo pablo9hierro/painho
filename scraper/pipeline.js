@@ -206,8 +206,15 @@ async function runPipeline({ dryRun = false, limit = 0 } = {}) {
 }
 
 function buildCaption(title, paragraph) {
-  const lines = [`📰 ${title}`, '', paragraph, '', '#primeirasnoticias #noticias #brasil'];
-  return lines.join('\n');
+  return `${title}\n\n${paragraph}\n\nLink na bio.\n`;
 }
 
-module.exports = { runPipeline, scrapeNewsList, loadState };
+module.exports = {
+  runPipeline,
+  scrapeNewsList,
+  scrapeArticleParagraph,
+  getSnapImage,
+  loadState,
+  saveState,
+  buildCaption,
+};

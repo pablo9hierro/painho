@@ -6,8 +6,8 @@ const { getContext, saveSession }              = require('./scraper/browser');
 const { humanDelay }                           = require('./scraper/auth');
 const { scrapeArticleParagraph, getSnapImage,
         loadState, saveState }                 = require('./scraper/pipeline');
-const { uploadToCloudinary }                   = require('./services/cloudinary');
-const { postToInstagram }                      = require('./services/instagram');
+const { uploadToCloudinary, pingCloudinary }   = require('./services/cloudinary');
+const { postToInstagram, getMyAccount }        = require('./services/instagram');
 
 const CMS_URL   = process.env.WEBSG_URL || 'https://primeirasnoticias.com.br/websg/';
 const LIST_URL  = 'https://primeirasnoticias.com.br/websg/?p=noticias&frm=Listar';
@@ -226,6 +226,28 @@ async function uiDone(page) {
 // ── Main ──────────────────────────────────────────────────────
 
 async function main() {
+  console.log('\n[painho] ▶ Verificando credenciais...');
+
+  // Valida Cloudinary
+  try {
+    await pingCloudinary();
+    console.log('[painho] ✅ Cloudinary OK');
+  } catch (e) {
+    console.error('[painho] ❌ Cloudinary FALHOU:', e.message);
+    console.error('[painho] Verifique CLOUDINARY_CLOUD_NAME / API_KEY / API_SECRET no .env');
+    process.exit(1);
+  }
+
+  // Valida Instagram
+  try {
+    const acc = await getMyAccount();
+    console.log(`[painho] ✅ Instagram OK — @${acc.username} (${acc.followers_count} seguidores)`);
+  } catch (e) {
+    console.error('[painho] ❌ Instagram FALHOU:', e.message);
+    console.error('[painho] Verifique INSTAGRAM_USER_ID / INSTAGRAM_ACCESS_TOKEN no .env');
+    process.exit(1);
+  }
+
   console.log('\n[painho] ▶ Abrindo browser...');
   console.log('[painho] Faça login no CMS e vá em Notícias > Gerenciar Notícias');
   console.log('[painho] O widget aparecerá automaticamente na listagem.\n');

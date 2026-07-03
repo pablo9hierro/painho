@@ -8,13 +8,26 @@ cloudinary.config({
 });
 
 async function uploadToCloudinary(filePath, publicId) {
-  const result = await cloudinary.uploader.upload(filePath, {
-    public_id: publicId,
-    folder: 'primeirasnoticias',
-    overwrite: true,
-    resource_type: 'image',
-  });
-  return result.secure_url;
+  try {
+    const result = await cloudinary.uploader.upload(filePath, {
+      public_id: publicId,
+      folder: 'primeirasnoticias',
+      overwrite: true,
+      resource_type: 'image',
+    });
+    return result.secure_url;
+  } catch (err) {
+    // Log completo para diagnóstico
+    const code    = err.http_code || err.code || '?';
+    const detail  = err.message || (err.error && JSON.stringify(err.error)) || String(err);
+    console.error(`[cloudinary] HTTP ${code}: ${detail}`);
+    throw new Error(`Cloudinary ${code}: ${detail}`);
+  }
 }
 
-module.exports = { uploadToCloudinary };
+async function pingCloudinary() {
+  const result = await cloudinary.api.ping();
+  return result.status === 'ok';
+}
+
+module.exports = { uploadToCloudinary, pingCloudinary };

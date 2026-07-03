@@ -16,6 +16,8 @@ const TABLE_SEL = '#main_content > div.row > div > form > div:nth-child(1) > tab
 // ── Lê a listagem da página atual (sem navegar) ────────────────
 
 async function readListFromCurrentPage(page) {
+  // Garante que a página está estável antes de ler
+  await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
   await page.locator(TABLE_SEL).waitFor({ state: 'visible', timeout: 15000 });
   const rows = await page.locator(`${TABLE_SEL} > tr`).all();
   const items = [];
@@ -278,6 +280,14 @@ async function main() {
     const url = page.url();
     if (!url.includes('p=noticias') || !url.includes('frm=Listar')) return;
 
+    // Aguarda a página parar de navegar (evita "Execution context was destroyed")
+    try {
+      await page.waitForLoadState('networkidle', { timeout: 8000 });
+    } catch (_) {}
+
+    // Confirma URL de novo após networkidle (pode ter redirecionado)
+    if (!page.url().includes('frm=Listar')) return;
+
     // Não reinjetar se widget já está no DOM
     const hasWidget = await page.evaluate(() => !!document.getElementById('__pn')).catch(() => false);
     if (hasWidget) return;
@@ -289,7 +299,6 @@ async function main() {
         console.warn('[painho] Tabela vazia ou acesso negado.');
         return;
       }
-      // Salva sessão enquanto o usuário está autenticado
       await saveSession().catch(() => {});
       const state = loadState();
       await injectFloatingWidget(page, cachedItems, state.processed);
@@ -299,8 +308,13 @@ async function main() {
     }
   };
 
-  // Dispara em cada carregamento de página (ex: após login manual)
-  page.on('load', () => tryInject().catch(() => {}));
+  // Debounce: aguarda 1.2s após o load antes de tentar injetar
+  // Evita chamar durante cadeia de redirecionamentos
+  let injectTimer = null;
+  page.on('load', () => {
+    clearTimeout(injectTimer);
+    injectTimer = setTimeout(() => tryInject().catch(() => {}), 1200);
+  });
 
   // Abre CMS — usa session.json automaticamente se válida
   await page.goto(CMS_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });

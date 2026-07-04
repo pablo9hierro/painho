@@ -22,6 +22,26 @@ async function igGet(endpoint, token) {
 }
 
 /**
+ * Aguarda o container de mídia ficar FINISHED antes de publicar.
+ * Erro [9007] "Media ID is not available" acontece quando publicamos
+ * antes da imagem terminar de processar no servidor do Instagram.
+ */
+async function waitForContainer(containerId, token, timeoutMs = 90000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const data = await igGet(`/${containerId}?fields=status_code,status`, token);
+    const code = data.status_code;
+    if (code === 'FINISHED')  return;
+    if (code === 'ERROR')     throw new Error(`Instagram processamento falhou: ${data.status || 'ERROR'}`);
+    if (code === 'EXPIRED')   throw new Error('Container expirou sem ser publicado');
+    // IN_PROGRESS ou undefined — aguarda 4s e tenta de novo
+    console.log(`[instagram] Container ${containerId}: ${code || '?'} — aguardando...`);
+    await new Promise(r => setTimeout(r, 4000));
+  }
+  throw new Error('Timeout aguardando container do Instagram ficar pronto');
+}
+
+/**
  * Posta uma imagem no Instagram @primeirasnoticias_
  * @param {string} imageUrl  URL pública da imagem (Cloudinary)
  * @param {string} caption   Legenda do post
@@ -36,7 +56,10 @@ async function postToInstagram(imageUrl, caption) {
   const container = await igPost(`/${userId}/media`, { image_url: imageUrl, caption }, token);
   console.log('[instagram] Container criado:', container.id);
 
-  // Passo 2: publicar
+  // Passo 2: aguarda processamento (evita erro 9007)
+  await waitForContainer(container.id, token);
+
+  // Passo 3: publicar
   const publish = await igPost(`/${userId}/media_publish`, { creation_id: container.id }, token);
   console.log('[instagram] Publicado! Post ID:', publish.id);
 

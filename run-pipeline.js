@@ -6,7 +6,7 @@ const { getContext, saveSession }              = require('./scraper/browser');
 const { humanDelay }                           = require('./scraper/auth');
 const { scrapeArticleParagraph, getSnapImage,
         loadState, saveState }                 = require('./scraper/pipeline');
-const { uploadToCloudinary, pingCloudinary }   = require('./services/cloudinary');
+const { uploadToCloudinary, deleteFromCloudinary, pingCloudinary } = require('./services/cloudinary');
 const { postToInstagram, getMyAccount }        = require('./services/instagram');
 
 const CMS_URL   = process.env.WEBSG_URL || 'https://primeirasnoticias.com.br/websg/';
@@ -370,6 +370,11 @@ async function main() {
       const caption = `${item.title}\n\n${paragraph}\n\nLink na bio.\n`;
       await uiLog(page, '  Postando no Instagram...');
       const igPost = await postToInstagram(imageUrl, caption);
+
+      // Remove do Cloudinary após publicar (mantém plano gratuito)
+      await deleteFromCloudinary(`primeirasnoticias/pn_${item.id}`)
+        .then(r  => console.log(`[painho] Cloudinary deletado: ${r}`))
+        .catch(e => console.warn('[painho] Falha ao deletar Cloudinary:', e.message));
 
       state.processed.push(item.id);
       saveState(state);

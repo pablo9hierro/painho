@@ -38,10 +38,64 @@ async function readListFromCurrentPage(page) {
   return items;
 }
 
+// ── Login automático + navegação até a listagem ────────────────
+
+async function ensureOnListing(page) {
+  // 1. Se a página de login apareceu, loga automaticamente com o .env
+  if ((await page.locator('input[type="password"]').count()) > 0) {
+    console.log('[painho] Página de login detectada — logando automaticamente...');
+
+    const userInput = page.locator('input[name="usuario"], input[type="text"]').first();
+    await userInput.click();
+    await humanDelay(200, 500);
+    await userInput.fill('');
+    await page.keyboard.type(process.env.WEBSG_USER, { delay: 60 });
+    await humanDelay(300, 700);
+
+    const passInput = page.locator('input[name="senha"], input[type="password"]').first();
+    await passInput.click();
+    await humanDelay(200, 400);
+    await passInput.fill('');
+    await page.keyboard.type(process.env.WEBSG_PASS, { delay: 70 });
+    await humanDelay(400, 900);
+
+    await page.locator('button[type="submit"], input[type="submit"], .btn-primary').first().click();
+
+    // Espera alguns segundos até a página logada carregar
+    await page.waitForLoadState('networkidle', { timeout: 25000 }).catch(() => {});
+    await humanDelay(3000, 5000);
+
+    if ((await page.locator('input[type="password"]').count()) > 0) {
+      throw new Error('Login falhou — verifique WEBSG_USER/WEBSG_PASS no .env');
+    }
+    console.log('[painho] ✅ Login OK —', page.url());
+    await saveSession().catch(() => {});
+  }
+
+  // 2. Se ainda não está na listagem, clica em Gerenciar Notícias no painel
+  if (!page.url().includes('frm=Listar')) {
+    try {
+      const newsLink = page.locator('#widget_boxs > div > div.panel-heading > div > a').first();
+      await newsLink.waitFor({ state: 'visible', timeout: 10000 });
+      await humanDelay(600, 1200);
+      await newsLink.click();
+      await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+      console.log('[painho] Navegou para listagem:', page.url());
+    } catch (_) {
+      console.log('[painho] Fallback: indo direto para a listagem');
+      await page.goto(LIST_URL, { waitUntil: 'networkidle' }).catch(() => {});
+    }
+  }
+}
+
 // ── Widget flutuante não-bloqueante ────────────────────────────
 
 async function injectFloatingWidget(page, items, processedIds) {
   const processed = new Set(processedIds);
+  const pendingIds = items
+    .filter(i => !processed.has(i.id))
+    .map(i => i.id)
+    .sort((a, b) => a - b);
 
   const rows = items.slice(0, 30).map(i => {
     const done  = processed.has(i.id);
@@ -57,7 +111,7 @@ async function injectFloatingWidget(page, items, processedIds) {
             </tr>`;
   }).join('');
 
-  await page.evaluate(({ rows }) => {
+  await page.evaluate(({ rows, pendingIds }) => {
     if (document.getElementById('__pn')) return;
 
     const style = document.createElement('style');
@@ -134,6 +188,7 @@ async function injectFloatingWidget(page, items, processedIds) {
             <input id="__pn-id" type="number" placeholder="ID inicial" />
             <button id="__pn-btn">▶ Iniciar</button>
           </div>
+          <div id="__pn-hint" style="font-size:11px;color:#e3b341;min-height:16px;margin-bottom:2px"></div>
           <div id="__pn-err"></div>
         </div>
         <div id="__pn-prog">
@@ -159,9 +214,13 @@ async function injectFloatingWidget(page, items, processedIds) {
     document.addEventListener('mousemove', e => { if(drag){ el.style.left=(e.clientX-dx)+'px'; el.style.top=(e.clientY-dy)+'px'; } });
     document.addEventListener('mouseup', () => { drag=false; });
 
+    /* Cancela auto-início em qualquer interação manual */
+    let cancelAuto = () => {};
+
     /* Row click → fill input */
     document.querySelectorAll('.pn-row:not(.done)').forEach(tr => {
       tr.onclick = () => {
+        cancelAuto();
         document.getElementById('__pn-id').value = tr.dataset.id;
         document.getElementById('__pn-err').textContent = '';
       };
@@ -173,6 +232,8 @@ async function injectFloatingWidget(page, items, processedIds) {
     const inp   = document.getElementById('__pn-id');
 
     const go = async () => {
+      if (btn.disabled) return;
+      cancelAuto();
       const id = inp.value.trim();
       if (!id || isNaN(parseInt(id))) { errEl.textContent = 'Digite um ID válido.'; return; }
       btn.disabled = true;
@@ -194,8 +255,37 @@ async function injectFloatingWidget(page, items, processedIds) {
     };
     btn.onclick = go;
     inp.onkeydown = e => { if(e.key==='Enter') go(); };
+
+    /* Auto-início: retoma da notícia seguinte à última processada (localStorage) */
+    const hintEl = document.getElementById('__pn-hint');
+    const lastId = parseInt(localStorage.getItem('painho_last_id'));
+    const nextId = isNaN(lastId) ? null : (pendingIds.find(id => id > lastId) || null);
+
+    if (nextId) {
+      inp.value = nextId;
+      let secs = 10;
+      const label = () =>
+        `Último processado: ${lastId} — auto-início do ID ${nextId} em ${secs}s (digite ou clique numa linha para cancelar)`;
+      hintEl.textContent = label();
+
+      const timer = setInterval(() => {
+        secs--;
+        if (secs <= 0) { clearInterval(timer); hintEl.textContent = ''; go(); }
+        else hintEl.textContent = label();
+      }, 1000);
+
+      cancelAuto = () => {
+        clearInterval(timer);
+        hintEl.textContent = 'Auto-início cancelado — digite o ID desejado.';
+        cancelAuto = () => {};
+      };
+      inp.addEventListener('input', () => cancelAuto());
+    } else if (!isNaN(lastId)) {
+      hintEl.textContent = `Último processado: ${lastId} — nenhuma notícia nova depois dele.`;
+    }
+
     setTimeout(() => inp.focus(), 120);
-  }, { rows });
+  }, { rows, pendingIds });
 }
 
 // ── Helpers UI ─────────────────────────────────────────────────
@@ -251,10 +341,10 @@ async function main() {
   }
 
   console.log('\n[painho] ▶ Abrindo browser...');
-  console.log('[painho] Faça login no CMS e vá em Notícias > Gerenciar Notícias');
+  console.log('[painho] Login automático com as credenciais do .env (se necessário).');
   console.log('[painho] O widget aparecerá automaticamente na listagem.\n');
 
-  // Abre browser com session.json (se existir). NÃO tenta login automático.
+  // Abre browser com session.json (se existir); sem sessão, loga sozinho.
   const ctx  = await getContext();
   const page = await ctx.newPage();
 
@@ -318,6 +408,10 @@ async function main() {
 
   // Abre CMS — usa session.json automaticamente se válida
   await page.goto(CMS_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+
+  // Login automático + clique em Gerenciar Notícias até chegar na listagem
+  await ensureOnListing(page);
 
   // Verifica imediatamente (se sessão válida → pode já estar na listagem)
   await tryInject();
@@ -378,6 +472,10 @@ async function main() {
 
       state.processed.push(item.id);
       saveState(state);
+
+      // Guarda o último ID processado no localStorage (persiste via session.json)
+      await page.evaluate(id => localStorage.setItem('painho_last_id', String(id)), item.id).catch(() => {});
+      await saveSession().catch(() => {});
       ok++;
 
       await uiLog(page, `  ✅ Publicado! Post: ${igPost.id}`, 'success');

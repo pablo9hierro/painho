@@ -1,4 +1,4 @@
-const { login, humanDelay } = require('./auth');
+const { login, humanDelay, ensureLoggedIn } = require('./auth');
 const { uploadToCloudinary } = require('../services/cloudinary');
 const { postToInstagram } = require('../services/instagram');
 const fs = require('fs');
@@ -29,6 +29,7 @@ function saveState(state) {
 
 async function scrapeNewsList(page) {
   await page.goto(LIST_URL, { waitUntil: 'networkidle' });
+  await ensureLoggedIn(page, LIST_URL, { waitUntil: 'networkidle' });
   await humanDelay(500, 900);
 
   const tableBase = '#main_content > div.row > div > form > div:nth-child(1) > table > tbody';
@@ -67,6 +68,7 @@ async function scrapeArticleParagraph(ctx, articleUrl) {
       : `https://primeirasnoticias.com.br${articleUrl}`;
 
     await tab.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await ensureLoggedIn(tab, url, { waitUntil: 'domcontentloaded', timeout: 20000 });
 
     let text = '';
 
@@ -107,6 +109,7 @@ async function getSnapImage(ctx, newsId) {
 
   try {
     await tab.goto(snapUrl, { waitUntil: 'networkidle', timeout: 25000 });
+    await ensureLoggedIn(tab, snapUrl, { waitUntil: 'networkidle', timeout: 25000 });
     await humanDelay(1500, 2500);
 
     // Click the already-selected template to ensure preview is fresh

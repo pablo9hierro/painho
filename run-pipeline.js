@@ -3,7 +3,7 @@ const fs   = require('fs');
 const path = require('path');
 
 const { getContext, saveSession }              = require('./scraper/browser');
-const { humanDelay }                           = require('./scraper/auth');
+const { humanDelay, isLoginPage, performLogin } = require('./scraper/auth');
 const { scrapeArticleParagraph, getSnapImage,
         loadState, saveState }                 = require('./scraper/pipeline');
 const { uploadToCloudinary, deleteFromCloudinary, pingCloudinary } = require('./services/cloudinary');
@@ -42,32 +42,13 @@ async function readListFromCurrentPage(page) {
 
 async function ensureOnListing(page) {
   // 1. Se a página de login apareceu, loga automaticamente com o .env
-  if ((await page.locator('input[type="password"]').count()) > 0) {
+  if (await isLoginPage(page)) {
     console.log('[painho] Página de login detectada — logando automaticamente...');
+    await performLogin(page);
 
-    const userInput = page.locator('input[name="usuario"], input[type="text"]').first();
-    await userInput.click();
-    await humanDelay(200, 500);
-    await userInput.fill('');
-    await page.keyboard.type(process.env.WEBSG_USER, { delay: 60 });
-    await humanDelay(300, 700);
+    // Espera alguns segundos até a página logada estabilizar
+    await humanDelay(2000, 3500);
 
-    const passInput = page.locator('input[name="senha"], input[type="password"]').first();
-    await passInput.click();
-    await humanDelay(200, 400);
-    await passInput.fill('');
-    await page.keyboard.type(process.env.WEBSG_PASS, { delay: 70 });
-    await humanDelay(400, 900);
-
-    await page.locator('button[type="submit"], input[type="submit"], .btn-primary').first().click();
-
-    // Espera alguns segundos até a página logada carregar
-    await page.waitForLoadState('networkidle', { timeout: 25000 }).catch(() => {});
-    await humanDelay(3000, 5000);
-
-    if ((await page.locator('input[type="password"]').count()) > 0) {
-      throw new Error('Login falhou — verifique WEBSG_USER/WEBSG_PASS no .env');
-    }
     console.log('[painho] ✅ Login OK —', page.url());
     await saveSession().catch(() => {});
   }
@@ -92,10 +73,6 @@ async function ensureOnListing(page) {
 
 async function injectFloatingWidget(page, items, processedIds) {
   const processed = new Set(processedIds);
-  const pendingIds = items
-    .filter(i => !processed.has(i.id))
-    .map(i => i.id)
-    .sort((a, b) => a - b);
 
   const rows = items.slice(0, 30).map(i => {
     const done  = processed.has(i.id);
@@ -111,7 +88,7 @@ async function injectFloatingWidget(page, items, processedIds) {
             </tr>`;
   }).join('');
 
-  await page.evaluate(({ rows, pendingIds }) => {
+  await page.evaluate(({ rows }) => {
     if (document.getElementById('__pn')) return;
 
     const style = document.createElement('style');
@@ -152,6 +129,11 @@ async function injectFloatingWidget(page, items, processedIds) {
         color:#fff;font-weight:700;cursor:pointer;font-size:12px}
       #__pn-btn:hover{background:#2ea043}
       #__pn-btn:disabled{background:#21262d;color:#6e7681;cursor:not-allowed}
+      #__pn-resume-btn{display:none;width:100%;margin-bottom:8px;padding:8px 10px;
+        background:#1f6feb;border:none;border-radius:6px;color:#fff;
+        font-weight:700;cursor:pointer;font-size:12px}
+      #__pn-resume-btn:hover{background:#388bfd}
+      #__pn-resume-btn:disabled{background:#21262d;color:#6e7681;cursor:not-allowed}
       #__pn-err{color:#f85149;font-size:11px;min-height:16px}
       @keyframes pn-spin{to{transform:rotate(360deg)}}
       #__pn-prog{display:none}
@@ -184,11 +166,12 @@ async function injectFloatingWidget(page, items, processedIds) {
               <tbody>${rows}</tbody>
             </table>
           </div>
+          <button id="__pn-resume-btn">↺ Usar último ID</button>
           <div id="__pn-irow">
             <input id="__pn-id" type="number" placeholder="ID inicial" />
             <button id="__pn-btn">▶ Iniciar</button>
           </div>
-          <div id="__pn-hint" style="font-size:11px;color:#e3b341;min-height:16px;margin-bottom:2px"></div>
+          <div id="__pn-hint" style="font-size:11px;color:#8b949e;min-height:16px;margin-bottom:2px"></div>
           <div id="__pn-err"></div>
         </div>
         <div id="__pn-prog">
@@ -214,30 +197,33 @@ async function injectFloatingWidget(page, items, processedIds) {
     document.addEventListener('mousemove', e => { if(drag){ el.style.left=(e.clientX-dx)+'px'; el.style.top=(e.clientY-dy)+'px'; } });
     document.addEventListener('mouseup', () => { drag=false; });
 
-    /* Cancela auto-início em qualquer interação manual */
-    let cancelAuto = () => {};
-
     /* Row click → fill input */
     document.querySelectorAll('.pn-row:not(.done)').forEach(tr => {
       tr.onclick = () => {
-        cancelAuto();
         document.getElementById('__pn-id').value = tr.dataset.id;
         document.getElementById('__pn-err').textContent = '';
       };
     });
 
     /* Submit */
-    const errEl = document.getElementById('__pn-err');
-    const btn   = document.getElementById('__pn-btn');
-    const inp   = document.getElementById('__pn-id');
+    const errEl     = document.getElementById('__pn-err');
+    const btn       = document.getElementById('__pn-btn');
+    const inp       = document.getElementById('__pn-id');
+    const resumeBtn = document.getElementById('__pn-resume-btn');
+    const hintEl    = document.getElementById('__pn-hint');
 
-    const go = async () => {
+    const setBusy = (busy) => {
+      btn.disabled = busy;
+      resumeBtn.disabled = busy;
+      btn.textContent = busy ? '⌛ Verificando...' : '▶ Iniciar';
+    };
+
+    const go = async (idOverride) => {
       if (btn.disabled) return;
-      cancelAuto();
-      const id = inp.value.trim();
+      const id = String(idOverride != null ? idOverride : inp.value).trim();
       if (!id || isNaN(parseInt(id))) { errEl.textContent = 'Digite um ID válido.'; return; }
-      btn.disabled = true;
-      btn.textContent = '⌛ Verificando...';
+      inp.value = id;
+      setBusy(true);
       errEl.textContent = '';
       try {
         const res = await window.__painhoStart(id);
@@ -246,46 +232,29 @@ async function injectFloatingWidget(page, items, processedIds) {
           document.getElementById('__pn-prog').style.display  = 'block';
         } else {
           errEl.textContent = (res && res.error) || 'Erro.';
-          btn.disabled = false; btn.textContent = '▶ Iniciar';
+          setBusy(false);
         }
       } catch(e) {
         errEl.textContent = e.message;
-        btn.disabled = false; btn.textContent = '▶ Iniciar';
+        setBusy(false);
       }
     };
-    btn.onclick = go;
+    btn.onclick = () => go();
     inp.onkeydown = e => { if(e.key==='Enter') go(); };
 
-    /* Auto-início: retoma da notícia seguinte à última processada (localStorage) */
-    const hintEl = document.getElementById('__pn-hint');
+    /* Botão "Usar último ID" — processa do ID seguinte ao último publicado
+       (guardado no localStorage) até a notícia mais recente da listagem. */
     const lastId = parseInt(localStorage.getItem('painho_last_id'));
-    const nextId = isNaN(lastId) ? null : (pendingIds.find(id => id > lastId) || null);
-
-    if (nextId) {
-      inp.value = nextId;
-      let secs = 10;
-      const label = () =>
-        `Último processado: ${lastId} — auto-início do ID ${nextId} em ${secs}s (digite ou clique numa linha para cancelar)`;
-      hintEl.textContent = label();
-
-      const timer = setInterval(() => {
-        secs--;
-        if (secs <= 0) { clearInterval(timer); hintEl.textContent = ''; go(); }
-        else hintEl.textContent = label();
-      }, 1000);
-
-      cancelAuto = () => {
-        clearInterval(timer);
-        hintEl.textContent = 'Auto-início cancelado — digite o ID desejado.';
-        cancelAuto = () => {};
-      };
-      inp.addEventListener('input', () => cancelAuto());
-    } else if (!isNaN(lastId)) {
-      hintEl.textContent = `Último processado: ${lastId} — nenhuma notícia nova depois dele.`;
+    if (!isNaN(lastId)) {
+      const nextId = lastId + 1;
+      resumeBtn.style.display = '';
+      resumeBtn.textContent = `↺ Usar último ID (retomar do ${nextId})`;
+      hintEl.textContent = `Última notícia publicada: ID ${lastId}`;
+      resumeBtn.onclick = () => go(nextId);
     }
 
     setTimeout(() => inp.focus(), 120);
-  }, { rows, pendingIds });
+  }, { rows });
 }
 
 // ── Helpers UI ─────────────────────────────────────────────────
@@ -358,8 +327,11 @@ async function main() {
     const id = parseInt(idStr);
     if (!cachedItems)          return { ok: false, error: 'Listagem não carregada ainda.' };
     if (isNaN(id) || id <= 0)  return { ok: false, error: 'ID inválido.' };
-    const found = cachedItems.find(i => i.id === id);
-    if (!found)                return { ok: false, error: `ID ${id} não encontrado na listagem.` };
+    // ID funciona como limite inferior (não precisa existir exatamente) —
+    // necessário para "Usar último ID", que passa lastId+1, que pode não ser
+    // o ID exato de nenhuma notícia caso haja lacunas na numeração.
+    const hasAny = cachedItems.some(i => i.id >= id);
+    if (!hasAny)               return { ok: false, error: `Nenhuma notícia com ID ≥ ${id} na listagem.` };
     resolveId(id);
     return { ok: true };
   });

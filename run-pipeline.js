@@ -16,26 +16,28 @@ const TABLE_SEL = '#main_content > div.row > div > form > div:nth-child(1) > tab
 // ── Lê a listagem da página atual (sem navegar) ────────────────
 
 async function readListFromCurrentPage(page) {
-  // Garante que a página está estável antes de ler
-  await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-  await page.locator(TABLE_SEL).waitFor({ state: 'visible', timeout: 15000 });
-  const rows = await page.locator(`${TABLE_SEL} > tr`).all();
-  const items = [];
+  // Espera só o elemento que realmente importa — esperar a rede inteira
+  // ficar ociosa (networkidle) trava minutos porque o painel tem widgets
+  // com polling em segundo plano que nunca somem de vez.
+  await page.locator(TABLE_SEL).waitFor({ state: 'visible', timeout: 20000 });
 
-  for (const row of rows) {
-    const idEl = row.locator('.label.label-primary2, .label-primary2');
-    if ((await idEl.count()) === 0) continue;
-    const id = parseInt((await idEl.first().innerText()).trim());
-    if (isNaN(id)) continue;
-    const aEl = row.locator('td:nth-child(2) a').first();
-    if ((await aEl.count()) === 0) continue;
-    items.push({
-      id,
-      title:      (await aEl.innerText()).trim(),
-      articleUrl: await aEl.getAttribute('href'),
-    });
-  }
-  return items;
+  // Lê a tabela inteira num único round-trip (page.evaluate) em vez de vários
+  // round-trips do Playwright por linha — com muitas notícias na tabela isso
+  // sozinho já levava minutos.
+  return page.evaluate((sel) => {
+    const rows = Array.from(document.querySelectorAll(`${sel} > tr`));
+    const items = [];
+    for (const row of rows) {
+      const idEl = row.querySelector('.label.label-primary2, .label-primary2');
+      if (!idEl) continue;
+      const id = parseInt(idEl.textContent.trim());
+      if (Number.isNaN(id)) continue;
+      const aEl = row.querySelector('td:nth-child(2) a');
+      if (!aEl) continue;
+      items.push({ id, title: aEl.textContent.trim(), articleUrl: aEl.getAttribute('href') });
+    }
+    return items;
+  }, TABLE_SEL);
 }
 
 // ── Login automático + navegação até a listagem ────────────────
@@ -60,11 +62,11 @@ async function ensureOnListing(page) {
       await newsLink.waitFor({ state: 'visible', timeout: 10000 });
       await humanDelay(600, 1200);
       await newsLink.click();
-      await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+      await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
       console.log('[painho] Navegou para listagem:', page.url());
     } catch (_) {
       console.log('[painho] Fallback: indo direto para a listagem');
-      await page.goto(LIST_URL, { waitUntil: 'networkidle' }).catch(() => {});
+      await page.goto(LIST_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
     }
   }
 }
@@ -337,25 +339,24 @@ async function main() {
   });
 
   // Detecta a página de listagem e injeta o widget
+  let injecting = false;
   const tryInject = async () => {
-    if (pipelineStarted) return;
+    // pipelineStarted/injecting evitam trabalho duplicado quando o listener
+    // de 'load' dispara em cima da chamada explícita feita logo após
+    // ensureOnListing() (ambas podem disparar quase ao mesmo tempo)
+    if (pipelineStarted || injecting) return;
     const url = page.url();
     if (!url.includes('p=noticias') || !url.includes('frm=Listar')) return;
-
-    // Aguarda a página parar de navegar (evita "Execution context was destroyed")
-    try {
-      await page.waitForLoadState('networkidle', { timeout: 8000 });
-    } catch (_) {}
-
-    // Confirma URL de novo após networkidle (pode ter redirecionado)
-    if (!page.url().includes('frm=Listar')) return;
 
     // Não reinjetar se widget já está no DOM
     const hasWidget = await page.evaluate(() => !!document.getElementById('__pn')).catch(() => false);
     if (hasWidget) return;
 
+    injecting = true;
     console.log('[painho] Listagem detectada — lendo notícias...');
     try {
+      // readListFromCurrentPage já espera o elemento certo ficar visível —
+      // não precisa esperar a rede inteira ficar ociosa antes disso.
       cachedItems = await readListFromCurrentPage(page);
       if (cachedItems.length === 0) {
         console.warn('[painho] Tabela vazia ou acesso negado.');
@@ -367,6 +368,8 @@ async function main() {
       console.log(`[painho] ${cachedItems.length} notícias encontradas. Widget ativo.`);
     } catch (e) {
       console.error('[painho] Erro ao ler listagem:', e.message);
+    } finally {
+      injecting = false;
     }
   };
 
@@ -380,7 +383,7 @@ async function main() {
 
   // Abre CMS — usa session.json automaticamente se válida
   await page.goto(CMS_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  await humanDelay(500, 1000);
 
   // Login automático + clique em Gerenciar Notícias até chegar na listagem
   await ensureOnListing(page);

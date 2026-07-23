@@ -51,7 +51,10 @@ async function performLogin(page) {
   await humanDelay(400, 900);
 
   await page.locator('button[type="submit"], input[type="submit"], .btn-primary').first().click();
-  await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+  // domcontentloaded, não networkidle — o painel tem widgets com polling em
+  // segundo plano que nunca deixam a rede "ociosa", o que travava a espera
+  // pelo tempo cheio do timeout toda vez.
+  await page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
   await humanDelay(1200, 2200);
 
   if (await isLoginPage(page)) {
@@ -67,7 +70,8 @@ async function login() {
     console.log('[auth] Sessão ativa encontrada — pulando login');
   } else {
     console.log('[auth] Abrindo página de login...');
-    await page.goto(LOGIN_URL, { waitUntil: 'networkidle' });
+    await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' });
+    await humanDelay(500, 1000);
 
     if (await isLoginPage(page)) {
       await performLogin(page);
@@ -87,12 +91,12 @@ async function login() {
       const newsLink = page.locator('#widget_boxs > div > div.panel-heading > div > a').first();
       await newsLink.waitFor({ state: 'visible', timeout: 10000 });
       await newsLink.click();
-      await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+      await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
       console.log('[auth] Navegou para:', page.url());
     } catch (e) {
       // fallback: navegar direto pela URL
       console.log('[auth] Fallback: navegando direto para lista de notícias');
-      await page.goto(NEWS_LIST_URL, { waitUntil: 'networkidle' });
+      await page.goto(NEWS_LIST_URL, { waitUntil: 'domcontentloaded' });
     }
   }
 
@@ -103,7 +107,7 @@ async function login() {
 // login (sessão caiu no meio do scraping), refaz o login na hora e navega de
 // volta para `targetUrl` (a página que estava sendo raspada). Retorna true
 // se precisou relogar (para o chamador saber que deve re-verificar o DOM).
-async function ensureLoggedIn(page, targetUrl, gotoOpts = { waitUntil: 'networkidle', timeout: 25000 }) {
+async function ensureLoggedIn(page, targetUrl, gotoOpts = { waitUntil: 'domcontentloaded', timeout: 25000 }) {
   if (!(await isLoginPage(page))) return false;
 
   console.warn('[auth] ⚠ Sessão expirou durante o scraping — relogando...');

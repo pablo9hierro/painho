@@ -28,34 +28,29 @@ function saveState(state) {
 // ── Scrape news list ──────────────────────────────────
 
 async function scrapeNewsList(page) {
-  await page.goto(LIST_URL, { waitUntil: 'networkidle' });
-  await ensureLoggedIn(page, LIST_URL, { waitUntil: 'networkidle' });
-  await humanDelay(500, 900);
+  await page.goto(LIST_URL, { waitUntil: 'domcontentloaded' });
+  await ensureLoggedIn(page, LIST_URL, { waitUntil: 'domcontentloaded' });
 
   const tableBase = '#main_content > div.row > div > form > div:nth-child(1) > table > tbody';
-  await page.locator(tableBase).waitFor({ state: 'visible', timeout: 15000 });
+  await page.locator(tableBase).waitFor({ state: 'visible', timeout: 20000 });
 
-  const rows = await page.locator(`${tableBase} > tr`).all();
-  const items = [];
-
-  for (const row of rows) {
-    // Only rows that have a numeric ID label
-    const idEl = row.locator('.label.label-primary2, .label-primary2');
-    if ((await idEl.count()) === 0) continue;
-
-    const idText = (await idEl.first().innerText()).trim();
-    const id = parseInt(idText);
-    if (isNaN(id)) continue;
-
-    // Public article URL (opens in new tab when clicked)
-    const titleEl = row.locator('td:nth-child(2) a').first();
-    const articleUrl = await titleEl.getAttribute('href');
-    const title = (await titleEl.innerText()).trim();
-
-    items.push({ id, title, articleUrl });
-  }
-
-  return items;
+  // Lê a tabela inteira num único round-trip (page.evaluate) em vez de um
+  // round-trip do Playwright por linha — com muitas notícias na tabela isso
+  // sozinho já levava minutos.
+  return page.evaluate((sel) => {
+    const rows = Array.from(document.querySelectorAll(`${sel} > tr`));
+    const items = [];
+    for (const row of rows) {
+      const idEl = row.querySelector('.label.label-primary2, .label-primary2');
+      if (!idEl) continue;
+      const id = parseInt(idEl.textContent.trim());
+      if (Number.isNaN(id)) continue;
+      const aEl = row.querySelector('td:nth-child(2) a');
+      if (!aEl) continue;
+      items.push({ id, title: aEl.textContent.trim(), articleUrl: aEl.getAttribute('href') });
+    }
+    return items;
+  }, tableBase);
 }
 
 // ── Scrape article paragraph ──────────────────────────

@@ -76,16 +76,25 @@ async function getMyAccount() {
 }
 
 /**
- * Renova o token por mais 60 dias (só funciona com user tokens, não system user)
+ * Renova o token de longa duração (60 dias) trocando o token atual
+ * por um novo via fb_exchange_token. Precisa estar válido ainda.
  */
 async function refreshToken() {
   const token = process.env.INSTAGRAM_ACCESS_TOKEN;
-  const url = `${IG_API}/oauth/access_token`;
-  const params = new URLSearchParams({ grant_type: 'ig_refresh_token', access_token: token });
-  const res = await fetch(`${url}?${params}`);
+  const appId = process.env.INSTAGRAM_APP_ID;
+  const appSecret = process.env.INSTAGRAM_APP_SECRET;
+  if (!appId || !appSecret) throw new Error('INSTAGRAM_APP_ID e INSTAGRAM_APP_SECRET são obrigatórios no .env');
+
+  const params = new URLSearchParams({
+    grant_type: 'fb_exchange_token',
+    client_id: appId,
+    client_secret: appSecret,
+    fb_exchange_token: token,
+  });
+  const res = await fetch(`${IG_API}/oauth/access_token?${params}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
-  console.log('[instagram] Token renovado! Expira em:', Math.floor(data.expires_in / 86400), 'dias');
+  console.log('[instagram] Token renovado! Expira em ~60 dias');
   return data;
 }
 

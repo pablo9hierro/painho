@@ -55,7 +55,14 @@ async function performLogin(page) {
   // segundo plano que nunca deixam a rede "ociosa", o que travava a espera
   // pelo tempo cheio do timeout toda vez.
   await page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
-  await humanDelay(1200, 2200);
+
+  // Aguarda o form de login sumir em vez de checar uma vez após delay fixo —
+  // o WEBSG às vezes demora mais que isso pra processar o POST, e a checagem
+  // única dava falso negativo de "falha no login" mesmo com credenciais certas.
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline && (await isLoginPage(page))) {
+    await humanDelay(500, 900);
+  }
 
   if (await isLoginPage(page)) {
     throw new Error('[auth] Falha no login — verifique WEBSG_USER/WEBSG_PASS no .env');

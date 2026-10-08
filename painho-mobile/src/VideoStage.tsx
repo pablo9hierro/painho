@@ -52,7 +52,10 @@ export function VideoStage({ src, onVideoRef }: VideoStageProps) {
             width: 1080 + 140,
             height: 1920 + 140,
             objectFit: "cover",
-            filter: "blur(46px) brightness(.58) saturate(.90)",
+            // blur mais leve (46px -> 24px) — decodificar o vídeo DUAS vezes (frente + fundo) já é pesado,
+            // somar um blur gigante em cima disso é um risco real de travar celular mais fraco (pode ter sido
+            // a causa da tela branca depois de mexer no vídeo).
+            filter: "blur(24px) brightness(.58) saturate(.90)",
             transform: "scale(1.10)",
           }}
         />

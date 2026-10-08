@@ -819,9 +819,14 @@ const Editor = forwardRef<EditorHandle, { videoSrc: string; handle: string; coll
       return
     }
     if (videoDragging.current && videoDragStart.current) {
-      const dx = (e.clientX - videoDragStart.current.x) / SCALE
-      const dy = (e.clientY - videoDragStart.current.y) / SCALE
-      setVideoTransform((t) => ({ ...t, x: videoDragStart.current!.ix + dx, y: videoDragStart.current!.iy + dy }))
+      // CRASH REAL (confirmado via sourcemap num celular de verdade): a função de atualização do estado lia
+      // `videoDragStart.current` só na hora que o React processa a fila — que pode ser DEPOIS do dedo já ter
+      // soltado (onVideoPointerUp zera essa referência pra null nesse meio tempo), travando com "Cannot read
+      // properties of null". Tira os números ANTES de chamar setVideoTransform, não lê a referência depois.
+      const { x: ix, y: iy } = videoDragStart.current
+      const nx = ix + (e.clientX - videoDragStart.current.x) / SCALE
+      const ny = iy + (e.clientY - videoDragStart.current.y) / SCALE
+      setVideoTransform((t) => ({ ...t, x: nx, y: ny }))
     }
   }
   const onVideoPointerUp = (e: React.PointerEvent) => {

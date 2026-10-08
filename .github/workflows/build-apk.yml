@@ -1,0 +1,51 @@
+name: Build APK (editor de Reels)
+
+# Compila o APK do editor mobile (painho-mobile) na nuvem do GitHub — nada de Android Studio local.
+# Roda sozinho quando algo muda em painho-mobile/, ou manualmente em Actions > Build APK > Run workflow.
+# O APK pronto fica em "Artifacts" no resumo do workflow, pra baixar no celular.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'painho-mobile/**'
+      - '.github/workflows/build-apk.yml'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: painho-mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Instala dependências
+        run: npm ci
+
+      - name: Compila o app web (Vite)
+        run: npm run build
+
+      - name: Sincroniza com o projeto Android
+        run: npx cap sync android
+
+      - name: Gradle executável
+        run: chmod +x android/gradlew
+
+      - name: Compila o APK (debug — já instalável, não precisa assinar)
+        working-directory: painho-mobile/android
+        run: ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: painho-reels-apk
+          path: painho-mobile/android/app/build/outputs/apk/debug/app-debug.apk

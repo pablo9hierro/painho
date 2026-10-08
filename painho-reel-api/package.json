@@ -1,0 +1,16 @@
+{
+  "name": "painho-reel-api",
+  "version": "1.0.0",
+  "description": "API enxuta só pra publicar Reels editados no editor mobile (Cloudinary + Instagram Graph API) — sem o scraper pesado do Painho principal, pra poder ficar 24/7 num servidor de verdade.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cloudinary": "^2.5.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^2.0.0"
+  }
+}

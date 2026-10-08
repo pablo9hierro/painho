@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Painho Reels</string>
+    <string name="title_activity_main">Painho Reels</string>
+    <string name="package_name">br.com.primeirasnoticias.painho</string>
+    <string name="custom_url_scheme">br.com.primeirasnoticias.painho</string>
+</resources>
